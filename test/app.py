@@ -20,26 +20,17 @@ def str_to_bool(str_input):
     return str_input.lower() == "true"
 
 
-def load_config():
-    with open('chat_config.json', 'r') as file:
-        return json.load(file)
-
-config = load_config()
-
-def str_to_bool(str_input):
-    if not isinstance(str_input, str):
-        return False
-    return str_input.lower() == "true"
-
-# Load configuration variables
-azure_openai_endpoint = config.get("AZURE_OPENAI_ENDPOINT")
-azure_openai_key = config.get("AZURE_OPENAI_KEY")
-openai_api_key = config.get("OPENAI_API_KEY")
-authentication_required = config.get("AUTHENTICATION_REQUIRED", False)
-assistant_id = config.get("ASSISTANT_ID")
-instructions = config.get("RUN_INSTRUCTIONS", "")
-assistant_title = config.get("ASSISTANT_TITLE", "Assistants API UI")
-enabled_file_upload_message = config.get("ENABLED_FILE_UPLOAD_MESSAGE", "Upload a file")
+# Load environment variables
+azure_openai_endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT")
+azure_openai_key = os.environ.get("AZURE_OPENAI_KEY")
+openai_api_key = os.environ.get("OPENAI_API_KEY")
+authentication_required = str_to_bool(os.environ.get("AUTHENTICATION_REQUIRED", False))
+assistant_id = os.environ.get("ASSISTANT_ID")
+instructions = os.environ.get("RUN_INSTRUCTIONS", "")
+assistant_title = os.environ.get("ASSISTANT_TITLE", "Assistants API UI")
+enabled_file_upload_message = os.environ.get(
+    "ENABLED_FILE_UPLOAD_MESSAGE", "Upload a file"
+)
 
 
 # Load authentication configuration
