@@ -1,9 +1,9 @@
 {
-  "OPENAI_API_KEY": "sk-proj-RB2Lxt9yuQbpZD5BkSQpT3BlbkFJ34C1j65dlzSrSXpN8scM",
+  "OPENAI_API_KEY": "[Your OpenAI API Key Here]",
   "AZURE_OPENAI_ENDPOINT": "",
   "AZURE_OPENAI_KEY": "",
   "AUTHENTICATION_REQUIRED": false,
-  "ASSISTANT_ID": "asst_3xmZthAj4dJo4y4XN7aTcOef",
+  "ASSISTANT_ID": "[Assistant ID Here]",
   "RUN_INSTRUCTIONS": "",
   "ASSISTANT_TITLE": "IRONMAN SBot Multi-Modal",
   "ENABLED_FILE_UPLOAD_MESSAGE": "Upload a file"
