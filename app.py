@@ -2,45 +2,37 @@ import os
 import base64
 import re
 import json
-
 import streamlit as st
-import openai
-from openai import AssistantEventHandler
+from openai import OpenAI, AssistantEventHandler
 from tools import TOOL_MAP
 from typing_extensions import override
-from dotenv import load_dotenv
-import streamlit_authenticator as stauth
-
-load_dotenv()
-
-
-def str_to_bool(str_input):
-    if not isinstance(str_input, str):
-        return False
-    return str_input.lower() == "true"
-
+import streamlit.components.v1 as components
 
 def load_config():
-    with open('chat_config.json', 'r') as file:
-        return json.load(file)
+    with open('chat_config.json', 'r') as f:
+        config = json.load(f)
+    return config
 
-config = load_config()
+def save_config(config):
+    with open('chat_config.json', 'w') as f:
+        json.dump(config, f, indent=4)
 
 def str_to_bool(str_input):
     if not isinstance(str_input, str):
         return False
     return str_input.lower() == "true"
+
+config = load_config()
 
 # Load configuration variables
 azure_openai_endpoint = config.get("AZURE_OPENAI_ENDPOINT")
 azure_openai_key = config.get("AZURE_OPENAI_KEY")
 openai_api_key = config.get("OPENAI_API_KEY")
-authentication_required = config.get("AUTHENTICATION_REQUIRED", False)
+authentication_required = str_to_bool(config.get("AUTHENTICATION_REQUIRED", False))
 assistant_id = config.get("ASSISTANT_ID")
 instructions = config.get("RUN_INSTRUCTIONS", "")
 assistant_title = config.get("ASSISTANT_TITLE", "Assistants API UI")
 enabled_file_upload_message = config.get("ENABLED_FILE_UPLOAD_MESSAGE", "Upload a file")
-
 
 # Load authentication configuration
 if authentication_required:
@@ -56,14 +48,13 @@ if authentication_required:
 
 client = None
 if azure_openai_endpoint and azure_openai_key:
-    client = openai.AzureOpenAI(
+    client = OpenAI(
         api_key=azure_openai_key,
         api_version="2024-02-15-preview",
         azure_endpoint=azure_openai_endpoint,
     )
 else:
-    client = openai.OpenAI(api_key=openai_api_key)
-
+    client = OpenAI(api_key=openai_api_key)
 
 class EventHandler(AssistantEventHandler):
     @override
@@ -95,7 +86,7 @@ class EventHandler(AssistantEventHandler):
 
     @override
     def on_tool_call_created(self, tool_call):
-        if tool_call.type == "code_interpreter":
+        if tool_call.type == "code_interpreter" or tool_call.type == "image_recognition":
             st.session_state.current_tool_input = ""
             with st.chat_message("Assistant"):
                 st.session_state.current_tool_input_markdown = st.empty()
@@ -106,7 +97,7 @@ class EventHandler(AssistantEventHandler):
             with st.chat_message("Assistant"):
                 st.session_state.current_tool_input_markdown = st.empty()
 
-        if delta.type == "code_interpreter":
+        if delta.type == "code_interpreter" or delta.type == "image_recognition":
             if delta.code_interpreter.input:
                 st.session_state.current_tool_input += delta.code_interpreter.input
                 input_code = f"### code interpreter\ninput:\n```python\n{st.session_state.current_tool_input}\n```"
@@ -120,54 +111,21 @@ class EventHandler(AssistantEventHandler):
     @override
     def on_tool_call_done(self, tool_call):
         st.session_state.tool_calls.append(tool_call)
-        if tool_call.type == "code_interpreter":
+        if tool_call.type == "code_interpreter" or tool_call.type == "image_recognition":
             if tool_call.id in [x.id for x in st.session_state.tool_calls]:
                 return
-            input_code = f"### code interpreter\ninput:\n```python\n{tool_call.code_interpreter.input}\n```"
+            input_code = f"### {tool_call.type}\ninput:\n```python\n{tool_call.code_interpreter.input}\n```"
             st.session_state.current_tool_input_markdown.markdown(input_code, True)
             st.session_state.chat_log.append({"name": "assistant", "msg": input_code})
             st.session_state.current_tool_input_markdown = None
             for output in tool_call.code_interpreter.outputs:
                 if output.type == "logs":
-                    output = f"### code interpreter\noutput:\n```\n{output.logs}\n```"
+                    output = f"### {tool_call.type}\noutput:\n```\n{output.logs}\n```"
                     with st.chat_message("Assistant"):
                         st.markdown(output, True)
                         st.session_state.chat_log.append(
                             {"name": "assistant", "msg": output}
                         )
-        elif (
-            tool_call.type == "function"
-            and self.current_run.status == "requires_action"
-        ):
-            with st.chat_message("Assistant"):
-                msg = f"### Function Calling: {tool_call.function.name}"
-                st.markdown(msg, True)
-                st.session_state.chat_log.append({"name": "assistant", "msg": msg})
-            tool_calls = self.current_run.required_action.submit_tool_outputs.tool_calls
-            tool_outputs = []
-            for submit_tool_call in tool_calls:
-                tool_function_name = submit_tool_call.function.name
-                tool_function_arguments = json.loads(
-                    submit_tool_call.function.arguments
-                )
-                tool_function_output = TOOL_MAP[tool_function_name](
-                    **tool_function_arguments
-                )
-                tool_outputs.append(
-                    {
-                        "tool_call_id": submit_tool_call.id,
-                        "output": tool_function_output,
-                    }
-                )
-
-            with client.beta.threads.runs.submit_tool_outputs_stream(
-                thread_id=st.session_state.thread.id,
-                run_id=self.current_run.id,
-                tool_outputs=tool_outputs,
-                event_handler=EventHandler(),
-            ) as stream:
-                stream.until_done()
-
 
 def create_thread(content, file):
     messages = [
@@ -181,7 +139,6 @@ def create_thread(content, file):
     thread = client.beta.threads.create()
     return thread
 
-
 def create_message(thread, content, file):
     attachments = []
     if file is not None:
@@ -192,14 +149,12 @@ def create_message(thread, content, file):
         thread_id=thread.id, role="user", content=content, attachments=attachments
     )
 
-
 def create_file_link(file_name, file_id):
     content = client.files.content(file_id)
     content_type = content.response.headers["content-type"]
     b64 = base64.b64encode(content.text.encode(content.encoding)).decode()
     link_tag = f'<a href="data:{content_type};base64,{b64}" download="{file_name}">Download Link</a>'
     return link_tag
-
 
 def format_annotation(text):
     citations = []
@@ -221,11 +176,43 @@ def format_annotation(text):
     text_value += "\n\n" + "\n".join(citations)
     return text_value
 
-
-def run_stream(user_input, file):
+def run_stream(user_input, file_info=None):
+    file = file_info.get("file_data") if file_info else None
+    uploaded_file = file_info.get("uploaded_file") if file_info else None
+    file_type = file_info.get("type") if file_info else None
+    
     if "thread" not in st.session_state:
         st.session_state.thread = create_thread(user_input, file)
+    recognized_text = ""
+    openai_response = ""
+    audio_file_path = None
+
+    # Check file type and process accordingly
+    if uploaded_file and file_type.startswith("video"):
+        file_path = f"/tmp/{uploaded_file.name}"
+        with open(file_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+
+        video_summary = TOOL_MAP["summarize_video_motion"](file_path)
+        user_input += f"\n\nSummary of the video:\n{video_summary}"
+    elif uploaded_file and file_type.startswith("image"):
+        file_path = f"/tmp/{uploaded_file.name}"
+        with open(file_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+
+        recognized_text = TOOL_MAP["image_to_text"](file_path)
+        openai_response = TOOL_MAP["process_image_with_openai"](file_path)
+        user_input += f"\n\nRecognized text from image:\n{recognized_text}\n\nOpenAI's response based on the image:\n{openai_response}"
+    elif uploaded_file and file_type.startswith("audio"):
+        file_path = f"/tmp/{uploaded_file.name}"
+        with open(file_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+
+        transcription = TOOL_MAP["transcribe_audio"](file_path)
+        user_input += f"\n\nTranscription of the audio:\n{transcription}"
+
     create_message(st.session_state.thread, user_input, file)
+
     with client.beta.threads.runs.stream(
         thread_id=st.session_state.thread.id,
         assistant_id=assistant_id,
@@ -233,17 +220,34 @@ def run_stream(user_input, file):
     ) as stream:
         stream.until_done()
 
+    if st.session_state.audio_response_enabled:
+        # Generate speech for the assistant's response
+        assistant_response = st.session_state.chat_log[-1]["msg"]  # Last message from the assistant
+        audio_file_path = TOOL_MAP["text_to_speech_streaming"](assistant_response)
+        st.session_state.audio_file_path = audio_file_path
+
+        # Log the audio file path
+        st.write(f"Audio file path: {audio_file_path}")
+
+        # Check if the file exists
+        if os.path.exists(audio_file_path):
+            st.success("Audio file created successfully.")
+        else:
+            st.error("Audio file not found.")
 
 def handle_uploaded_file(uploaded_file):
-    file = client.files.create(file=uploaded_file, purpose="assistants")
-    return file
-
+    file_data = client.files.create(file=uploaded_file, purpose="assistants")
+    file_info = {
+        "file_data": file_data,
+        "uploaded_file": uploaded_file,  # store the uploaded_file
+        "type": uploaded_file.type  # directly get the mimetype from uploaded_file
+    }
+    return file_info
 
 def render_chat():
     for chat in st.session_state.chat_log:
         with st.chat_message(chat["name"]):
             st.markdown(chat["msg"], True)
-
 
 if "tool_call" not in st.session_state:
     st.session_state.tool_calls = []
@@ -254,12 +258,14 @@ if "chat_log" not in st.session_state:
 if "in_progress" not in st.session_state:
     st.session_state.in_progress = False
 
-
 def disable_form():
     st.session_state.in_progress = True
 
-
 def login():
+    if st.session_state["authentication_status"] is False:
+        st.error("Username/password is incorrect")
+    elif st.session_state["authentication_status"] is None:
+        st.warning("Please enter your username and password")
     if st.session_state["authentication_status"] is False:
         st.error("Username/password is incorrect")
     elif st.session_state["authentication_status"] is None:
@@ -267,18 +273,6 @@ def login():
 
 
 def main():
-    if (
-        authentication_required
-        and "credentials" in st.secrets
-        and authenticator is not None
-    ):
-        authenticator.login()
-        if not st.session_state["authentication_status"]:
-            login()
-            return
-        else:
-            authenticator.logout(location="sidebar")
-
     st.title(assistant_title)
     user_msg = st.chat_input(
         "Message", on_submit=disable_form, disabled=st.session_state.in_progress
@@ -296,13 +290,23 @@ def main():
                 "csv",
                 "json",
                 "geojson",
+                "mp4",
+                "avi",
+                "mov",
+                "mp3",
+                "wav",
+                "m4a",
                 "xlsx",
                 "xls",
             ],
-            disabled=st.session_state.in_progress,
+            disabled=st.session_state.in_progress
         )
     else:
         uploaded_file = None
+
+    # Add toggle for audio response
+    st.sidebar.header("Configuration")
+    st.sidebar.checkbox("Enable Audio Response", key="audio_response_enabled", value=False)
 
     if user_msg:
         render_chat()
@@ -310,16 +314,41 @@ def main():
             st.markdown(user_msg, True)
         st.session_state.chat_log.append({"name": "user", "msg": user_msg})
 
-        file = None
+        file_info = None
         if uploaded_file is not None:
-            file = handle_uploaded_file(uploaded_file)
-        run_stream(user_msg, file)
+            file_info = handle_uploaded_file(uploaded_file)
+        run_stream(user_msg, file_info)
         st.session_state.in_progress = False
         st.session_state.tool_call = None
         st.rerun()
 
     render_chat()
 
+    if "audio_file_path" in st.session_state and st.session_state.audio_file_path:
+        audio_file = st.session_state.audio_file_path
+        st.write(f"Playing audio from: {audio_file}")  # Log the audio file path
+        components.html(
+        f"""
+        <audio controls autoplay>
+            <source src="file://{audio_file}" type="audio/mpeg">
+            Your browser does not support the audio element.
+        </audio>
+        """,
+        height=60,
+    )
+
+    config["AZURE_OPENAI_ENDPOINT"] = st.sidebar.text_input("Azure OpenAI Endpoint", config["AZURE_OPENAI_ENDPOINT"])
+    config["AZURE_OPENAI_KEY"] = st.sidebar.text_input("Azure OpenAI Key", config["AZURE_OPENAI_KEY"])
+    config["OPENAI_API_KEY"] = st.sidebar.text_input("OpenAI API Key", config["OPENAI_API_KEY"])
+    config["AUTHENTICATION_REQUIRED"] = st.sidebar.checkbox("Authentication Required", config["AUTHENTICATION_REQUIRED"])
+    config["ASSISTANT_ID"] = st.sidebar.text_input("Assistant ID", config["ASSISTANT_ID"])
+    config["RUN_INSTRUCTIONS"] = st.sidebar.text_area("Run Instructions", config["RUN_INSTRUCTIONS"])
+    config["ASSISTANT_TITLE"] = st.sidebar.text_input("Assistant Title", config["ASSISTANT_TITLE"])
+    config["ENABLED_FILE_UPLOAD_MESSAGE"] = st.sidebar.text_input("Enabled File Upload Message", config["ENABLED_FILE_UPLOAD_MESSAGE"])
+
+    if st.sidebar.button("Save Configuration"):
+        save_config(config)
+        st.sidebar.success("Configuration saved!")
 
 if __name__ == "__main__":
     main()

@@ -1,0 +1,9 @@
+streamlit
+openai
+pillow
+tesseract
+pytesseract
+opencv-python-headless
+pydub
+gtts
+streamlit-authenticator
